@@ -1,0 +1,10 @@
+[project]
+name = "bullseye"
+version = "0.0.1"
+description = "Script to organize wallpapers based on labels"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["clip", "pillow>=11.3.0", "torch>=2.8.0", "torchvision>=0.23.0"]
+
+[tool.uv.sources]
+clip = { git = "https://github.com/openai/CLIP.git" }
