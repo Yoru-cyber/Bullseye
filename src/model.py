@@ -1,16 +1,15 @@
-import argparse
 import os
 import logging
 from pathlib import Path
 import pathlib
 import time
-import json
 import shutil
 import clip
 import torch
 from PIL import Image
 import onnxruntime as ort
 from torchvision import transforms
+
 
 log_file_name = f"bullseye.log"
 time_format = "%Y-%m-%d %H:%M:%S"
@@ -76,24 +75,13 @@ def preprocess_image(image_path):
     return image_tensor.detach().cpu().numpy()
 
 
-def main(dir_strpath: str, labels_strpath: str):
-    labels = []
+def process_images(dir_strpath: str, labels):
     dir = Path(dir_strpath)
-    labels_path = Path(labels_strpath)
     # Your custom labels (add/remove as needed)
     if dir.exists() is False:
         raise OSError(f"Directory does not exist: {dir_strpath}")
-    if labels_path.exists() is False:
-        raise OSError(f"File does not exist: {labels_strpath}")
     else:
-        try:
-            f = open(labels_path)
-            data = json.load(f)
-            f.close()
-            labels = data["labels"]
-        except IOError:
-            print("error")
-            # sys.stderr("Error reading file")
+        # sys.stderr("Error reading file")
         text = clip.tokenize(labels).to(device)
         with torch.no_grad():
             text_features = model.encode_text(text)
@@ -134,27 +122,3 @@ def main(dir_strpath: str, labels_strpath: str):
             except Exception as e:
                 print(f"Error processing {file}: {e}")
                 logging.error(f"{file} processed unsuccesfully")
-
-
-if __name__ == "__main__":
-    code_execution_start = time.perf_counter()
-    logging.info(f"Code started at {code_execution_start}")
-    # Set up argument parser
-    parser = argparse.ArgumentParser(
-        description="Process images in a directory and save results to JSON"
-    )
-
-    parser.add_argument(
-        "directory", type=str, help="Path to the directory containing images"
-    )
-
-    parser.add_argument("json_file", type=str, help="Path to the output JSON file")
-    args = parser.parse_args()
-    main(args.directory, args.json_file)
-    code_execution_finish = time.perf_counter()
-    print(
-        f"Code execution made under: {code_execution_finish-code_execution_start :0.2f}"
-    )
-    logging.info(
-        f"Code execution made under: {code_execution_finish-code_execution_start :0.2f}"
-    )

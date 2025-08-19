@@ -1,5 +1,8 @@
 # Bullseye 🎯
 
+<p align="center">
+  <img src="docs/screenshot-1.png" width="700" alt="screenshot of app">
+</p>
 This is an AI-Powered Image Organizer  
 
 Automatically categorizes images into folders using OpenAI's CLIP. Key features:  
@@ -18,6 +21,8 @@ and the inference runs and based on the results, it creates a folder with the hi
 - OpenAI CLIP
 - Pillow
 - ONNX
+- PySide6
+- QFluentWidgets
 
 ## Example config:
 
@@ -60,5 +65,9 @@ pip install -r pyproject.toml
 ## How to run 👍
 
 ```sh
-python main.py "PATH TO FOLDER WITH IMAGES" "PATH TO JSON CONFIG FILE"
+python main.py
 ```
+
+## License
+
+This software is under GPL-3.0. See `LICENSE.md` for more information.
