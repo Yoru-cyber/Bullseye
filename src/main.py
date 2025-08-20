@@ -1,33 +1,20 @@
-import sys
-import os
 import json
+import os
 import pathlib
-from PySide6.QtWidgets import (
-    QApplication,
-    QFileDialog,
-    QHBoxLayout,
-    QFrame,
-    QVBoxLayout,
-    QListWidgetItem,
-    QMessageBox,
-)
-from PySide6.QtCore import Qt, QObject, Signal, QThread
+import sys
+
+import torch
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QIcon
-from qfluentwidgets import (
-    NavigationItemPosition,
-    FluentWindow,
-    TitleLabel,
-    SubtitleLabel,
-    setFont,
-    FluentIcon as FIF,
-    PrimaryPushButton,
-    SwitchButton,
-    setTheme,
-    Theme,
-    ListWidget,
-    PrimaryToolButton,
-)
-from model import process_images
+from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout,
+                               QListWidgetItem, QMessageBox, QVBoxLayout)
+from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import (FluentWindow, ListWidget, NavigationItemPosition,
+                            PrimaryPushButton, PrimaryToolButton,
+                            SubtitleLabel, SwitchButton, Theme, TitleLabel,
+                            setFont, setTheme)
+
+from model import create_ort_session, load_model, process_images
 
 CONFIG_FILE = pathlib.Path("labels.json")
 if os.path.exists(CONFIG_FILE):
@@ -42,9 +29,52 @@ else:
         CONFIG_DATA = json.load(f)
 
 
+class AppState(QObject):
+    """Central application state container. Notifies listeners of changes."""
+
+    modelChanged = Signal(object)  
+    ortSessionChanged = Signal(object)
+    deviceChanged = Signal(object)  
+
+    def __init__(self):
+        super().__init__()
+        self._model = None
+        self._ort_session = None
+        self._device = None
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, value):
+        if self._model != value:
+            self._model = value
+            self.modelChanged.emit(value) 
+    @property
+    def ort_session(self):
+        return self._ort_session
+
+    @ort_session.setter
+    def ort_session(self, value):
+        if self._ort_session != value:
+            self._ort_session = value
+            self.ortSessionChanged.emit(value)  
+
+    @property
+    def device(self):
+        return self._device
+
+    @device.setter
+    def device(self, value):
+        if self._device != value:
+            self._device = value
+            self.deviceChanged.emit(value) 
+
+
 class Worker(QObject):
     finished = Signal()
-    # A signal to report errors back to the main thread
+    result = Signal(object)
     error = Signal(str)
 
     def __init__(self, target_function, *args, **kwargs):
@@ -55,7 +85,8 @@ class Worker(QObject):
 
     def run(self):
         try:
-            self._target_function(*self._args, **self._kwargs)
+            r = self._target_function(*self._args, **self._kwargs)
+            self.result.emit(r)
         except Exception as e:
             self.error.emit(str(e))
         finally:
@@ -95,17 +126,19 @@ class VLayout(QFrame):
 class HomeInterface(VLayout):
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent)
-
+        self.appState = parent.appState
         # Variable to store the selected folder path
         self.folder_path = "No folder selected"
 
         # Create main layout container
         self.filePathBox = QVBoxLayout()
+        self.loading_icon = SubtitleLabel("Loading model...")
+        self.vBoxLayout.addWidget(self.loading_icon)
         self.runBtn = PrimaryPushButton("Run")
         # Create folder selection widgets
         self.folderLabel = SubtitleLabel(f"Selected Folder: {self.folder_path}", self)
         self.folderLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.folderLabel.setWordWrap(True)
+        self.folderLabel.setWordWrap(False)
         self.selectFolderButton = PrimaryPushButton("Select Folder")
         self.selectFolderButton.clicked.connect(self._open_folder_dialog)
         self.runBtn.clicked.connect(self._start_thread)
@@ -116,6 +149,7 @@ class HomeInterface(VLayout):
         self.filePathBox.addWidget(self.runBtn, 0, Qt.AlignmentFlag.AlignCenter)
         self.vBoxLayout.addLayout(self.filePathBox)
         self.vBoxLayout.addStretch(1)
+        self.appState.modelChanged.connect(self.on_model_loaded)
 
     def _open_folder_dialog(self):
         """Opens folder selection dialog and updates the label"""
@@ -156,7 +190,14 @@ class HomeInterface(VLayout):
         # 2. Setup the worker and thread
         self.thread = QThread()
         # Pass the function 'f' and its arguments to the worker
-        self.worker = Worker(process_images, self.folder_path, CONFIG_DATA["labels"])
+        self.worker = Worker(
+            process_images,
+            self.folder_path,
+            CONFIG_DATA["labels"],
+            self.appState.device,
+            self.appState.model,
+            self.appState.ort_session,
+        )
 
         # 3. Move the worker to the new thread
         self.worker.moveToThread(self.thread)
@@ -170,6 +211,16 @@ class HomeInterface(VLayout):
 
         # 5. Start the thread
         self.thread.start()
+
+    def on_model_loaded(self, model):
+        # This slot is called automatically when app_state.model is set.
+        if model is not None:
+            # Model is loaded! Hide loading, show content.
+            self.loading_icon.setText("Model Loaded")
+            # You can also do other setup here with the model
+        else:
+            # Model was set to None (e.g., on error), show loading again.
+            self.loading_icon.setText("Loading Model")
 
 
 class SettingInterface(VLayout):
@@ -201,7 +252,7 @@ class SettingInterface(VLayout):
 
 
 class LabelsInterface(VLayout):
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, parent):
         super().__init__(text, parent)
         self._labels = CONFIG_DATA["labels"]
         self.Labels = ListWidget()
@@ -222,8 +273,9 @@ class LabelsInterface(VLayout):
 class MainWindow(FluentWindow):
     """Main Interface with Navigation"""
 
-    def __init__(self):
+    def __init__(self, appState):
         super().__init__()
+        self.appState = appState
         self.homeInterface = HomeInterface("Home", self)
         self.labelsInterface = LabelsInterface("Labels", self)
         self.settingInterface = SettingInterface("Settings", self)
@@ -251,7 +303,39 @@ class BullseyeApp:
 
     def __init__(self, args):
         self.app = QApplication(args)
-        self.window = MainWindow()
+        self.appState = AppState()
+        self.window = MainWindow(self.appState)
+        self.appState.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.thread = QThread()
+        self.worker = Worker(self.load_everything)
+        self.worker.result.connect(self._handle_loaded)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.error.connect(self._handle_error)
+        self.thread.start()
+
+    def load_everything(self):
+        device = self.appState.device
+        model, preprocess = load_model(device)
+        ort_session = create_ort_session(model, device)
+        return {"model": model, "ort_session": ort_session}
+
+    def _handle_error(self, message):
+        """
+        Handles errors reported from the worker thread.
+        """
+        print(message)
+
+    def _handle_loaded(self, result):
+        """Slot to receive the loaded model from the worker thread."""
+        model = result["model"]
+        ort_session = result["ort_session"]
+        print("Model loaded received in main thread!")
+        if model != None:
+            self.appState.model = model
+        print("ORT Session created!")
+        if ort_session != None:
+            self.appState.ort_session = ort_session
 
     def run(self):
         self.window.show()

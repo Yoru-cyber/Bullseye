@@ -1,15 +1,15 @@
-import os
 import logging
-from pathlib import Path
+import os
 import pathlib
-import time
 import shutil
+import time
+from pathlib import Path
+
 import clip
+import onnxruntime as ort
 import torch
 from PIL import Image
-import onnxruntime as ort
 from torchvision import transforms
-
 
 log_file_name = f"bullseye.log"
 time_format = "%Y-%m-%d %H:%M:%S"
@@ -17,36 +17,67 @@ formatter = logging.Formatter(
     fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt=time_format
 )
 logging.basicConfig(filename=log_file_name)
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
 logging.info("Started to load model CLIP")
 model_load_start = time.perf_counter()
-# Load CLIP model (automatically uses CPU if no GPU is available)
 
-model, preprocess = clip.load("ViT-B/32", device=device)
-model.eval()
-model_load_finish = time.perf_counter()
-logging.info(f"Model CLIP loaded in {model_load_finish-model_load_start :0.2f}")
-if pathlib.Path(os.getcwd(), "clip_image_encoder.onnx").exists() is False:
-    logging.info("No ONNX model found")
-    # Create a dummy input matching CLIP's expected format
-    dummy_image_input = torch.randn(1, 3, 224, 224).to(
-        device
-    )  # [batch, channels, height, width]
-    torch.onnx.export(
-        model.visual,  # Only export image encoder
-        dummy_image_input,
-        "clip_image_encoder.onnx",
-        input_names=["image"],
-        output_names=["features"],
-        dynamic_axes={
-            "image": {0: "batch"},  # Dynamic batch size
-            "features": {0: "batch"},
-        },
-        opset_version=14,  # ONNX opset (must be ≥14 for CLIP)
-    )
-    logging.info("ONNX model creating")
-ort_session = ort.InferenceSession("clip_image_encoder.onnx")
-logging.info("ONNX model loaded")
+
+# Load CLIP model (automatically uses CPU if no GPU is available)
+def load_model(device):
+    model, preprocess = clip.load("ViT-B/32", device=device)
+    model.eval()
+    return model, preprocess
+
+
+# if pathlib.Path(os.getcwd(), "clip_image_encoder.onnx").exists() is False:
+def create_ort_session(model, device):
+    onnx_path = "clip_image_encoder.onnx"
+    if pathlib.Path(os.getcwd(), onnx_path).exists():
+        return ort.InferenceSession(onnx_path)
+    else:
+        dummy_image_input = torch.randn(1, 3, 224, 224).to(
+            device
+        )  # [batch, channels, height, width]
+        torch.onnx.export(
+            model.visual,  # Only export image encoder
+            dummy_image_input,
+            "clip_image_encoder.onnx",
+            input_names=["image"],
+            output_names=["features"],
+            dynamic_axes={
+                "image": {0: "batch"},  # Dynamic batch size
+                "features": {0: "batch"},
+            },
+            opset_version=14,  # ONNX opset (must be ≥14 for CLIP)
+        )
+        return ort.InferenceSession(onnx_path)
+
+
+# model, preprocess = clip.load("ViT-B/32", device=device)
+# model.eval()
+# model_load_finish = time.perf_counter()
+# logging.info(f"Model CLIP loaded in {model_load_finish-model_load_start :0.2f}")
+# if pathlib.Path(os.getcwd(), "clip_image_encoder.onnx").exists() is False:
+#     logging.info("No ONNX model found")
+#     # Create a dummy input matching CLIP's expected format
+#     dummy_image_input = torch.randn(1, 3, 224, 224).to(
+#         device
+#     )  # [batch, channels, height, width]
+#     torch.onnx.export(
+#         model.visual,  # Only export image encoder
+#         dummy_image_input,
+#         "clip_image_encoder.onnx",
+#         input_names=["image"],
+#         output_names=["features"],
+#         dynamic_axes={
+#             "image": {0: "batch"},  # Dynamic batch size
+#             "features": {0: "batch"},
+#         },
+#         opset_version=14,  # ONNX opset (must be ≥14 for CLIP)
+#     )
+#     logging.info("ONNX model creating")
+# ort_session = ort.InferenceSession("clip_image_encoder.onnx")
+# logging.info("ONNX model loaded")
 
 
 def preprocess_image(image_path):
@@ -75,7 +106,7 @@ def preprocess_image(image_path):
     return image_tensor.detach().cpu().numpy()
 
 
-def process_images(dir_strpath: str, labels):
+def process_images(dir_strpath: str, labels, device, model, ort_session):
     dir = Path(dir_strpath)
     # Your custom labels (add/remove as needed)
     if dir.exists() is False:
